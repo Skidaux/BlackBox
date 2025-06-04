@@ -1,6 +1,6 @@
-# BlackBox Hello World App
+# BlackBox Search Server
 
-This project provides a minimal HTTP server written in Rust using the [`warp`](https://crates.io/crates/warp) framework. The server responds with `Hello world` on the root path and includes a very small in-memory search index. All previous JavaScript code has been removed, so no Node.js setup is required.
+This project provides a small HTTP server written in Rust using the [`warp`](https://crates.io/crates/warp) framework. It stores documents in named indexes on disk and supports basic full-text search.
 
 ## Building and Running
 
@@ -12,27 +12,26 @@ cargo run
 
 The server listens on port `3000` by default. Set the `PORT` environment variable to change the port.
 
-Visit `http://localhost:3000/` to see the message.
-
 ## API
 
 ### Add a document
 
 ```
-POST /documents
+POST /indexes/<index>/documents
 Content-Type: application/json
-{
-  "title": "Example",
-  "body": "Some text to index"
-}
+{ "any": "json" }
 ```
 
-The response contains the assigned document `id`.
+Creates the index if it does not exist and returns the assigned document `id`.
 
 ### Search documents
 
 ```
-GET /search?q=term
+GET /indexes/<index>/search?q=term
 ```
 
-Returns a JSON array of matching documents with their ids.
+Returns an array of documents whose serialized JSON contains the query string.
+
+## Data Storage
+
+All indexes are saved under the `data/` directory. Each index has a JSON file containing the list of documents so data persists between server restarts.

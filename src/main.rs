@@ -1,6 +1,9 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::fs;
 use tokio::sync::RwLock;
-use warp::Filter;
+use warp::{Filter, Rejection, Reply};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -11,7 +14,12 @@ struct Document {
     data: Value,
 }
 
-type Documents = Arc<RwLock<Vec<Document>>>;
+#[derive(Default, Clone, Serialize, Deserialize)]
+struct Index {
+    docs: Vec<Document>,
+}
+
+type Indexes = Arc<RwLock<HashMap<String, Index>>>;
 
 #[tokio::main]
 async fn main() {
@@ -20,22 +28,21 @@ async fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(3000);
 
-    let docs: Documents = Arc::new(RwLock::new(Vec::new()));
-    let docs_filter = warp::any().map(move || docs.clone());
+    let indexes = load_indexes().await;
+    let indexes_filter = warp::any().map(move || indexes.clone());
 
-    // Route that returns "Hello world" on the root path
     let hello = warp::path::end().map(|| "Hello world");
 
-    let add_document = warp::path("documents")
+    let add_document = warp::path!("indexes" / String / "documents")
         .and(warp::post())
         .and(warp::body::json())
-        .and(docs_filter.clone())
+        .and(indexes_filter.clone())
         .and_then(add_document);
 
-    let search = warp::path("search")
+    let search = warp::path!("indexes" / String / "search")
         .and(warp::get())
         .and(warp::query::<SearchQuery>())
-        .and(docs_filter)
+        .and(indexes_filter.clone())
         .and_then(search_documents);
 
     let routes = hello.or(add_document).or(search);
@@ -49,22 +56,40 @@ struct SearchQuery {
     q: String,
 }
 
-async fn add_document(doc: Value, docs: Documents) -> Result<impl warp::Reply, warp::Rejection> {
-    let mut list = docs.write().await;
-    let id = list.len() + 1;
-    list.push(Document { id, data: doc });
+async fn add_document(index: String, doc: Value, indexes: Indexes) -> Result<impl Reply, Rejection> {
+    let mut map = indexes.write().await;
+    let entry = map.entry(index.clone()).or_default();
+    let id = entry.docs.len() + 1;
+    entry.docs.push(Document { id, data: doc });
+
+    if let Err(e) = persist_index(&index, &entry.docs).await {
+        eprintln!("failed to save index {index}: {e}");
+        return Err(warp::reject());
+    }
+
     Ok(warp::reply::json(&json!({ "id": id })))
 }
 
-async fn search_documents(params: SearchQuery, docs: Documents) -> Result<impl warp::Reply, warp::Rejection> {
-    let list = docs.read().await;
-    let query = params.q.to_lowercase();
-    let results: Vec<_> = list
-        .iter()
-        .filter(|d| serialize_contains(&d.data, &query))
-        .map(|d| json!({ "id": d.id, "document": d.data }))
-        .collect();
-    Ok(warp::reply::json(&results))
+async fn search_documents(index: String, params: SearchQuery, indexes: Indexes) -> Result<impl Reply, Rejection> {
+    let map = indexes.read().await;
+    if let Some(idx) = map.get(&index) {
+        let query = params.q.to_lowercase();
+        let results: Vec<_> = idx
+            .docs
+            .iter()
+            .filter(|d| serialize_contains(&d.data, &query))
+            .map(|d| json!({ "id": d.id, "document": d.data }))
+            .collect();
+        Ok(warp::reply::with_status(
+            warp::reply::json(&results),
+            warp::http::StatusCode::OK,
+        ))
+    } else {
+        Ok(warp::reply::with_status(
+            warp::reply::json(&json!({"error": "index not found"})),
+            warp::http::StatusCode::NOT_FOUND,
+        ))
+    }
 }
 
 fn serialize_contains(value: &Value, query: &str) -> bool {
@@ -72,4 +97,39 @@ fn serialize_contains(value: &Value, query: &str) -> bool {
         .to_string()
         .to_lowercase()
         .contains(query)
+}
+
+async fn load_indexes() -> Indexes {
+    let mut map = HashMap::new();
+    let data_dir = PathBuf::from("data");
+    if let Err(e) = fs::create_dir_all(&data_dir).await {
+        eprintln!("failed to create data dir: {e}");
+        return Arc::new(RwLock::new(map));
+    }
+
+    let mut entries = match fs::read_dir(&data_dir).await {
+        Ok(e) => e,
+        Err(_) => return Arc::new(RwLock::new(map)),
+    };
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            if let Ok(content) = fs::read_to_string(&path).await {
+                if let Ok(docs) = serde_json::from_str::<Vec<Document>>(&content) {
+                    if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
+                        map.insert(name.to_string(), Index { docs });
+                    }
+                }
+            }
+        }
+    }
+
+    Arc::new(RwLock::new(map))
+}
+
+async fn persist_index(name: &str, docs: &Vec<Document>) -> Result<(), std::io::Error> {
+    let path = PathBuf::from("data").join(format!("{name}.json"));
+    let json = serde_json::to_string_pretty(docs)?;
+    fs::write(path, json).await
 }
