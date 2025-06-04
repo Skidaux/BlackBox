@@ -34,4 +34,6 @@ Returns an array of documents whose serialized JSON contains the query string.
 
 ## Data Storage
 
-All indexes are saved under the `data/` directory. Each index has a JSON file containing the list of documents so data persists between server restarts.
+All indexes are saved under the `data/` directory. Each index is stored as a binary file using [`bincode`](https://crates.io/crates/bincode), which loads faster and uses less space than JSON. Data persists between server restarts.
+
+Responses are automatically compressed with gzip when supported by the client.

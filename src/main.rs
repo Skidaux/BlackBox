@@ -19,6 +19,12 @@ struct Index {
     docs: Vec<Document>,
 }
 
+#[derive(Serialize, Deserialize)]
+struct PersistedDocument {
+    id: usize,
+    data: Vec<u8>, // JSON-encoded
+}
+
 type Indexes = Arc<RwLock<HashMap<String, Index>>>;
 
 #[tokio::main]
@@ -45,7 +51,10 @@ async fn main() {
         .and(indexes_filter.clone())
         .and_then(search_documents);
 
-    let routes = hello.or(add_document).or(search);
+    let routes = hello
+        .or(add_document)
+        .or(search)
+        .with(warp::compression::gzip());
 
     println!("Server running on port {}", port);
     warp::serve(routes).run(([0, 0, 0, 0], port)).await;
@@ -114,10 +123,18 @@ async fn load_indexes() -> Indexes {
 
     while let Ok(Some(entry)) = entries.next_entry().await {
         let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            if let Ok(content) = fs::read_to_string(&path).await {
-                if let Ok(docs) = serde_json::from_str::<Vec<Document>>(&content) {
+        if path.extension().and_then(|s| s.to_str()) == Some("bin") {
+            if let Ok(content) = fs::read(&path).await {
+                if let Ok(raw_docs) = bincode::deserialize::<Vec<PersistedDocument>>(&content) {
                     if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
+                        let docs = raw_docs
+                            .into_iter()
+                            .filter_map(|d| {
+                                serde_json::from_slice(&d.data)
+                                    .ok()
+                                    .map(|value| Document { id: d.id, data: value })
+                            })
+                            .collect();
                         map.insert(name.to_string(), Index { docs });
                     }
                 }
@@ -129,7 +146,16 @@ async fn load_indexes() -> Indexes {
 }
 
 async fn persist_index(name: &str, docs: &Vec<Document>) -> Result<(), std::io::Error> {
-    let path = PathBuf::from("data").join(format!("{name}.json"));
-    let json = serde_json::to_string_pretty(docs)?;
-    fs::write(path, json).await
+    let path = PathBuf::from("data").join(format!("{name}.bin"));
+    let raw: Vec<PersistedDocument> = docs
+        .iter()
+        .filter_map(|d| {
+            serde_json::to_vec(&d.data)
+                .ok()
+                .map(|data| PersistedDocument { id: d.id, data })
+        })
+        .collect();
+    let bytes = bincode::serialize(&raw)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    fs::write(path, bytes).await
 }
