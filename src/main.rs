@@ -45,7 +45,10 @@ async fn main() {
         .and(indexes_filter.clone())
         .and_then(search_documents);
 
-    let routes = hello.or(add_document).or(search);
+    let routes = hello
+        .or(add_document)
+        .or(search)
+        .with(warp::compression::gzip());
 
     println!("Server running on port {}", port);
     warp::serve(routes).run(([0, 0, 0, 0], port)).await;
@@ -114,9 +117,9 @@ async fn load_indexes() -> Indexes {
 
     while let Ok(Some(entry)) = entries.next_entry().await {
         let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            if let Ok(content) = fs::read_to_string(&path).await {
-                if let Ok(docs) = serde_json::from_str::<Vec<Document>>(&content) {
+        if path.extension().and_then(|s| s.to_str()) == Some("bin") {
+            if let Ok(content) = fs::read(&path).await {
+                if let Ok(docs) = bincode::deserialize::<Vec<Document>>(&content) {
                     if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
                         map.insert(name.to_string(), Index { docs });
                     }
@@ -129,7 +132,7 @@ async fn load_indexes() -> Indexes {
 }
 
 async fn persist_index(name: &str, docs: &Vec<Document>) -> Result<(), std::io::Error> {
-    let path = PathBuf::from("data").join(format!("{name}.json"));
-    let json = serde_json::to_string_pretty(docs)?;
-    fs::write(path, json).await
+    let path = PathBuf::from("data").join(format!("{name}.bin"));
+    let bytes = bincode::serialize(docs).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    fs::write(path, bytes).await
 }
