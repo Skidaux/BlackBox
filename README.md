@@ -24,6 +24,30 @@ Content-Type: application/json
 
 Creates the index if it does not exist and returns the assigned document `id`.
 
+### Bulk indexing
+
+```bash
+POST /indexes/<index>/bulk
+Content-Type: application/json
+{
+  "documents": [ {"title": "a"}, {"title": "b"} ]
+}
+```
+
+Allows multiple documents to be indexed in a single request.
+
+### Set field mapping
+
+```bash
+PUT /indexes/<index>/mapping
+Content-Type: application/json
+{
+  "fields": { "title": "string", "views": "numeric", "vector": "vector" }
+}
+```
+
+Defines simple field types for an index.
+
 ### Search documents
 
 ```
@@ -31,6 +55,36 @@ GET /indexes/<index>/search?q=term
 ```
 
 Returns an array of documents whose serialized JSON contains the query string.
+
+### Query DSL
+
+```bash
+POST /indexes/<index>/query
+Content-Type: application/json
+{
+  "term": { "title": "test" },
+  "sort": { "field": "views", "order": "desc" },
+  "aggs": "category"
+}
+```
+
+Supports simple term and range filters with optional sorting and basic count aggregation.
+
+### Search by vector
+
+```bash
+POST /indexes/<index>/search_vector
+Content-Type: application/json
+{
+  "vector": [0.1, 0.2, 0.3],
+  "k": 5,
+  "field": "vector"
+}
+```
+
+Documents may include an optional array field storing a vector embedding. The
+`/search_vector` endpoint returns the `k` nearest documents based on L2 distance
+using the specified vector field.
 
 ## Data Storage
 
