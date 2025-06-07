@@ -2,13 +2,15 @@ use reqwest::Client;
 use serde_json::json;
 use std::process::{Command, Stdio};
 use tokio::time::{Duration, sleep};
+use serial_test::serial;
 
 fn spawn_server(port: u16) -> std::process::Child {
     let exe = env!("CARGO_BIN_EXE_blackbox");
     Command::new(exe)
         .env("PORT", port.to_string())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .env("RUST_LOG", "info")
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
         .spawn()
         .expect("failed to spawn server")
 }
@@ -28,6 +30,7 @@ async fn wait_for(port: u16) {
     }
 }
 
+#[serial]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_add_and_search() {
     cleanup();
@@ -58,8 +61,10 @@ async fn test_add_and_search() {
     let res: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap();
     assert_eq!(res.len(), 1);
     srv.kill().unwrap();
+    let _ = srv.wait();
 }
 
+#[serial]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_bulk_and_dsl() {
     cleanup();
@@ -82,7 +87,8 @@ async fn test_bulk_and_dsl() {
 
     let query = json!({
         "range": {"views": {"gte": 15.0}},
-        "sort": {"field": "views", "order": "desc"}
+        "sort": {"field": "views", "order": "desc"},
+        "aggs": "views"
     });
     let resp = client
         .post(&format!("http://localhost:{port}/indexes/{index}/query"))
@@ -99,9 +105,13 @@ async fn test_bulk_and_dsl() {
         hits[0]["document"]["views"].as_i64().unwrap()
             >= hits[1]["document"]["views"].as_i64().unwrap()
     );
+    let aggs = res["aggregations"].as_object().unwrap();
+    assert_eq!(aggs.get("20").unwrap().as_i64().unwrap(), 1);
     srv.kill().unwrap();
+    let _ = srv.wait();
 }
 
+#[serial]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_vector_search() {
     cleanup();
@@ -135,4 +145,83 @@ async fn test_vector_search() {
     assert_eq!(res.len(), 1);
     assert_eq!(res[0]["document"]["title"], "b");
     srv.kill().unwrap();
+    let _ = srv.wait();
+}
+
+#[serial]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_persistence() {
+    cleanup();
+    let port1 = 4304u16;
+    let port2 = 4404u16;
+    let mut srv = spawn_server(port1);
+    wait_for(port1).await;
+    let client = Client::new();
+    let index = "persistidx";
+    let doc = json!({"title": "persist"});
+    client
+        .post(&format!("http://localhost:{port1}/indexes/{index}/documents"))
+        .json(&doc)
+        .send()
+        .await
+        .unwrap();
+    sleep(Duration::from_millis(100)).await;
+    srv.kill().unwrap();
+    let _ = srv.wait();
+
+    let mut srv = spawn_server(port2);
+    wait_for(port2).await;
+    let resp = client
+        .get(&format!("http://localhost:{port2}/indexes/{index}/search?q=persist"))
+        .send()
+        .await
+        .unwrap();
+    let body = resp.text().await.unwrap();
+    println!("persist body: {}", body);
+    let res: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap();
+    assert_eq!(res.len(), 1);
+    srv.kill().unwrap();
+    let _ = srv.wait();
+}
+
+#[serial]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_vector_custom_field() {
+    cleanup();
+    let port = 4105u16;
+    let mut srv = spawn_server(port);
+    wait_for(port).await;
+    let client = Client::new();
+    let index = "vecidx";
+    let mapping = json!({"fields": {"embedding": "vector"}});
+    client
+        .put(&format!("http://localhost:{port}/indexes/{index}/mapping"))
+        .json(&mapping)
+        .send()
+        .await
+        .unwrap();
+    let docs = json!({"documents": [
+        {"title": "foo", "embedding": [0.0, 1.0]},
+        {"title": "bar", "embedding": [1.0, 0.0]}
+    ]});
+    client
+        .post(&format!("http://localhost:{port}/indexes/{index}/bulk"))
+        .json(&docs)
+        .send()
+        .await
+        .unwrap();
+    let q = json!({"vector": [0.9, 0.1], "k": 1, "field": "embedding"});
+    let resp = client
+        .post(&format!("http://localhost:{port}/indexes/{index}/search_vector"))
+        .json(&q)
+        .send()
+        .await
+        .unwrap();
+    let text = resp.text().await.unwrap();
+    println!("custom vector body: {}", text);
+    let res: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
+    assert_eq!(res.len(), 1);
+    assert_eq!(res[0]["document"]["title"], "bar");
+    srv.kill().unwrap();
+    let _ = srv.wait();
 }

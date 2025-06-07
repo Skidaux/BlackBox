@@ -5,6 +5,7 @@ mod storage;
 use crate::index::{Document, Mapping};
 use crate::utils::{extract_vector, l2_distance, serialize_contains};
 use crate::storage::{Indexes, load_indexes, persist_index, persist_mapping};
+use env_logger;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use warp::{Filter, Rejection, Reply};
@@ -45,6 +46,7 @@ struct DslQuery {
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
     let port: u16 = std::env::var("PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(3000);
 
     let indexes = load_indexes().await;
@@ -95,7 +97,8 @@ async fn main() {
         .or(search)
         .or(search_dsl)
         .or(search_vector)
-        .with(warp::compression::gzip());
+        .with(warp::compression::gzip())
+        .with(warp::log("blackbox"));
 
     println!("Server running on port {}", port);
     warp::serve(routes).run(([0, 0, 0, 0], port)).await;
