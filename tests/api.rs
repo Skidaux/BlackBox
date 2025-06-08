@@ -68,6 +68,41 @@ async fn test_add_and_search() {
 
 #[serial]
 #[tokio::test(flavor = "multi_thread")]
+async fn test_search_limit() {
+    cleanup();
+    let port = 4601u16;
+    let mut srv = spawn_server(port);
+    wait_for(port).await;
+    let client = Client::new();
+    let index = "limitidx";
+    let bulk = json!({"documents": [
+        {"title": "foo"},
+        {"title": "bar"},
+        {"title": "baz"}
+    ]});
+    client
+        .post(&format!("http://localhost:{port}/indexes/{index}/bulk"))
+        .json(&bulk)
+        .send()
+        .await
+        .unwrap();
+
+    let resp = client
+        .get(&format!("http://localhost:{port}/indexes/{index}/search?q=a&limit=1"))
+        .send()
+        .await
+        .unwrap();
+    let body = resp.text().await.unwrap();
+    println!("limit body: {}", body);
+    let res: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let hits = res["hits"].as_array().unwrap();
+    assert_eq!(hits.len(), 1);
+    srv.kill().unwrap();
+    let _ = srv.wait();
+}
+
+#[serial]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_bulk_and_dsl() {
     cleanup();
     let port = 4102u16;
@@ -112,6 +147,40 @@ async fn test_bulk_and_dsl() {
     );
     let aggs = res["aggregations"].as_object().unwrap();
     assert_eq!(aggs.get("20").unwrap().as_i64().unwrap(), 1);
+    srv.kill().unwrap();
+    let _ = srv.wait();
+}
+
+#[serial]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_dsl_fuzzy() {
+    cleanup();
+    let port = 4602u16;
+    let mut srv = spawn_server(port);
+    wait_for(port).await;
+    let client = Client::new();
+    let index = "fuzzyidx";
+    let doc = json!({"title": "hello"});
+    client
+        .post(&format!("http://localhost:{port}/indexes/{index}/documents"))
+        .json(&doc)
+        .send()
+        .await
+        .unwrap();
+
+    let q = json!({"term": {"title": "hello"}, "fuzz": 1, "scores": true});
+    let resp = client
+        .post(&format!("http://localhost:{port}/indexes/{index}/query"))
+        .json(&q)
+        .send()
+        .await
+        .unwrap();
+    let text = resp.text().await.unwrap();
+    println!("dsl fuzzy body: {}", text);
+    let res: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let hits = res["hits"].as_array().unwrap();
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0]["score"].as_f64().unwrap() > 0.0);
     srv.kill().unwrap();
     let _ = srv.wait();
 }
