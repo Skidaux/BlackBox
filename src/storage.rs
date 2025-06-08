@@ -1,4 +1,4 @@
-use crate::index::{Document, PersistedDocument, Index, Mapping};
+use crate::index::{Document, Index, Mapping, PersistedDocument};
 use crate::utils::extract_vector;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -32,7 +32,11 @@ pub async fn load_indexes() -> Indexes {
                             .filter_map(|d| {
                                 serde_json::from_slice(&d.data).ok().map(|value| {
                                     let vector = extract_vector(&value, "vector");
-                                    Document { id: d.id, vector, data: value }
+                                    Document {
+                                        id: d.id,
+                                        vector,
+                                        data: value,
+                                    }
                                 })
                             })
                             .collect();
@@ -58,7 +62,8 @@ pub async fn persist_index(name: &str, index: &Index) -> Result<(), std::io::Err
                 .map(|data| PersistedDocument { id: d.id, data })
         })
         .collect();
-    let bytes = bincode::serialize(&raw).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let bytes =
+        bincode::serialize(&raw).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     fs::write(path, bytes).await
 }
 
@@ -72,6 +77,7 @@ pub async fn load_mapping(name: &str) -> Option<Mapping> {
 
 pub async fn persist_mapping(name: &str, mapping: &Mapping) -> Result<(), std::io::Error> {
     let path = PathBuf::from("data").join(format!("{name}.mapping.json"));
-    let bytes = serde_json::to_vec(mapping).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let bytes = serde_json::to_vec(mapping)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     fs::write(path, bytes).await
 }

@@ -56,6 +56,16 @@ GET /indexes/<index>/search?q=term
 
 Returns an array of documents whose serialized JSON contains the query string.
 
+Optional query parameters:
+
+```
+GET /indexes/<index>/search?q=term&limit=5&fuzz=1&scores=true
+```
+
+`limit` controls the number of hits returned, `fuzz` applies a simple
+Levenshtein distance for matches, and `scores` includes a `score` field in the
+results.
+
 ### Query DSL
 
 ```bash
@@ -77,14 +87,15 @@ POST /indexes/<index>/search_vector
 Content-Type: application/json
 {
   "vector": [0.1, 0.2, 0.3],
-  "k": 5,
+  "limit": 5,
   "field": "vector"
 }
 ```
 
 Documents may include an optional array field storing a vector embedding. The
-`/search_vector` endpoint returns the `k` nearest documents based on L2 distance
-using the specified vector field.
+`/search_vector` endpoint returns the nearest documents based on L2 distance
+using the specified vector field. Set `scores` to `true` to include the distance
+value with each hit.
 
 ## Data Storage
 

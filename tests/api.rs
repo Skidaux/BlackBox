@@ -1,8 +1,8 @@
 use reqwest::Client;
 use serde_json::json;
+use serial_test::serial;
 use std::process::{Command, Stdio};
 use tokio::time::{Duration, sleep};
-use serial_test::serial;
 
 fn spawn_server(port: u16) -> std::process::Child {
     let exe = env!("CARGO_BIN_EXE_blackbox");
@@ -34,7 +34,7 @@ async fn wait_for(port: u16) {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_add_and_search() {
     cleanup();
-    let port = 4101u16;
+    let port = 4501u16;
     let mut srv = spawn_server(port);
     wait_for(port).await;
     let client = Client::new();
@@ -51,15 +51,17 @@ async fn test_add_and_search() {
 
     let resp = client
         .get(&format!(
-            "http://localhost:{port}/indexes/{index}/search?q=hello"
+            "http://localhost:{port}/indexes/{index}/search?q=hell&fuzz=1&scores=true"
         ))
         .send()
         .await
         .unwrap();
     let body = resp.text().await.unwrap();
     println!("search body: {}", body);
-    let res: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap();
-    assert_eq!(res.len(), 1);
+    let res: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let hits = res["hits"].as_array().unwrap();
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0]["score"].as_f64().unwrap() > 0.0);
     srv.kill().unwrap();
     let _ = srv.wait();
 }
@@ -88,7 +90,9 @@ async fn test_bulk_and_dsl() {
     let query = json!({
         "range": {"views": {"gte": 15.0}},
         "sort": {"field": "views", "order": "desc"},
-        "aggs": "views"
+        "aggs": "views",
+        "limit": 2,
+        "scores": true
     });
     let resp = client
         .post(&format!("http://localhost:{port}/indexes/{index}/query"))
@@ -101,6 +105,7 @@ async fn test_bulk_and_dsl() {
     let res: serde_json::Value = serde_json::from_str(&body).unwrap();
     let hits = res["hits"].as_array().unwrap();
     assert_eq!(hits.len(), 2);
+    assert!(hits[0]["score"].is_number());
     assert!(
         hits[0]["document"]["views"].as_i64().unwrap()
             >= hits[1]["document"]["views"].as_i64().unwrap()
@@ -130,7 +135,7 @@ async fn test_vector_search() {
         .send()
         .await
         .unwrap();
-    let body = json!({"vector": [0.9, 0.1], "k": 1});
+    let body = json!({"vector": [0.9, 0.1], "limit": 1, "scores": true});
     let resp = client
         .post(&format!(
             "http://localhost:{port}/indexes/{index}/search_vector"
@@ -141,9 +146,11 @@ async fn test_vector_search() {
         .unwrap();
     let btext = resp.text().await.unwrap();
     println!("vector body: {}", btext);
-    let res: Vec<serde_json::Value> = serde_json::from_str(&btext).unwrap();
-    assert_eq!(res.len(), 1);
-    assert_eq!(res[0]["document"]["title"], "b");
+    let res: serde_json::Value = serde_json::from_str(&btext).unwrap();
+    let hits = res["hits"].as_array().unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0]["document"]["title"], "b");
+    assert!(hits[0]["score"].is_number());
     srv.kill().unwrap();
     let _ = srv.wait();
 }
@@ -160,7 +167,9 @@ async fn test_persistence() {
     let index = "persistidx";
     let doc = json!({"title": "persist"});
     client
-        .post(&format!("http://localhost:{port1}/indexes/{index}/documents"))
+        .post(&format!(
+            "http://localhost:{port1}/indexes/{index}/documents"
+        ))
         .json(&doc)
         .send()
         .await
@@ -172,14 +181,17 @@ async fn test_persistence() {
     let mut srv = spawn_server(port2);
     wait_for(port2).await;
     let resp = client
-        .get(&format!("http://localhost:{port2}/indexes/{index}/search?q=persist"))
+        .get(&format!(
+            "http://localhost:{port2}/indexes/{index}/search?q=persist"
+        ))
         .send()
         .await
         .unwrap();
     let body = resp.text().await.unwrap();
     println!("persist body: {}", body);
-    let res: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap();
-    assert_eq!(res.len(), 1);
+    let res: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let hits = res["hits"].as_array().unwrap();
+    assert_eq!(hits.len(), 1);
     srv.kill().unwrap();
     let _ = srv.wait();
 }
@@ -210,18 +222,22 @@ async fn test_vector_custom_field() {
         .send()
         .await
         .unwrap();
-    let q = json!({"vector": [0.9, 0.1], "k": 1, "field": "embedding"});
+    let q = json!({"vector": [0.9, 0.1], "limit": 1, "field": "embedding", "scores": true});
     let resp = client
-        .post(&format!("http://localhost:{port}/indexes/{index}/search_vector"))
+        .post(&format!(
+            "http://localhost:{port}/indexes/{index}/search_vector"
+        ))
         .json(&q)
         .send()
         .await
         .unwrap();
     let text = resp.text().await.unwrap();
     println!("custom vector body: {}", text);
-    let res: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
-    assert_eq!(res.len(), 1);
-    assert_eq!(res[0]["document"]["title"], "bar");
+    let res: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let hits = res["hits"].as_array().unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0]["document"]["title"], "bar");
+    assert!(hits[0]["score"].is_number());
     srv.kill().unwrap();
     let _ = srv.wait();
 }
