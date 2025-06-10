@@ -310,3 +310,89 @@ async fn test_vector_custom_field() {
     srv.kill().unwrap();
     let _ = srv.wait();
 }
+#[serial]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_root_and_errors() {
+    cleanup();
+    let port = 4206u16;
+    let mut srv = spawn_server(port);
+    wait_for(port).await;
+    let client = Client::new();
+
+    // root endpoint
+    let resp = client
+        .get(&format!("http://localhost:{port}"))
+        .send()
+        .await
+        .unwrap();
+    let body = resp.text().await.unwrap();
+    assert_eq!(body, "Hello world");
+
+    // search missing index
+    let resp = client
+        .get(&format!("http://localhost:{port}/indexes/missing/search?q=foo"))
+        .send()
+        .await
+        .unwrap();
+    let text = resp.text().await.unwrap();
+    let val: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(val.get("error").is_some());
+
+    // empty bulk
+    let bulk = json!({"documents": []});
+    let resp = client
+        .post(&format!("http://localhost:{port}/indexes/empty/bulk"))
+        .json(&bulk)
+        .send()
+        .await
+        .unwrap();
+    let res: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(res["ids"].as_array().unwrap().len(), 0);
+
+    srv.kill().unwrap();
+    let _ = srv.wait();
+}
+
+#[serial]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_mapping_persistence() {
+    cleanup();
+    let port1 = 4306u16;
+    let port2 = 4406u16;
+    let mut srv = spawn_server(port1);
+    wait_for(port1).await;
+    let client = Client::new();
+    let index = "mapidx";
+    let mapping = json!({"fields": {"embedding": "vector"}});
+    client
+        .put(&format!("http://localhost:{port1}/indexes/{index}/mapping"))
+        .json(&mapping)
+        .send()
+        .await
+        .unwrap();
+    srv.kill().unwrap();
+    let _ = srv.wait();
+
+    let mut srv2 = spawn_server(port2);
+    wait_for(port2).await;
+    let docs = json!({"documents": [{"embedding": [0.0, 1.0]}]});
+    client
+        .post(&format!("http://localhost:{port2}/indexes/{index}/bulk"))
+        .json(&docs)
+        .send()
+        .await
+        .unwrap();
+    let q = json!({"vector": [0.0, 1.0], "limit": 1, "field": "embedding"});
+    let resp = client
+        .post(&format!("http://localhost:{port2}/indexes/{index}/search_vector"))
+        .json(&q)
+        .send()
+        .await
+        .unwrap();
+    let json: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(json["hits"].as_array().unwrap().len(), 1);
+
+    srv2.kill().unwrap();
+    let _ = srv2.wait();
+}
+
