@@ -27,21 +27,19 @@ pub async fn load_indexes() -> Indexes {
             if let Ok(content) = fs::read(&path).await {
                 if let Ok(raw_docs) = bincode::deserialize::<Vec<PersistedDocument>>(&content) {
                     if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
-                        let docs = raw_docs
+                        let docs: Vec<Document> = raw_docs
                             .into_iter()
                             .filter_map(|d| {
                                 serde_json::from_slice(&d.data).ok().map(|value| {
                                     let vector = extract_vector(&value, "vector");
-                                    Document {
-                                        id: d.id,
-                                        vector,
-                                        data: value,
-                                    }
+                                    Document { id: d.id, vector, data: value }
                                 })
                             })
                             .collect();
                         let mapping = load_mapping(name).await;
-                        map.insert(name.to_string(), Index { docs, mapping });
+                        let mut index = Index { docs, mapping, ..Default::default() };
+                        index.build_inverted();
+                        map.insert(name.to_string(), index);
                     }
                 }
             }

@@ -70,7 +70,7 @@ async fn test_add_and_search() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_search_limit() {
     cleanup();
-    let port = 4601u16;
+    let port = 4801u16;
     let mut srv = spawn_server(port);
     wait_for(port).await;
     let client = Client::new();

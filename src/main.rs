@@ -184,11 +184,13 @@ async fn insert_doc(
     let entry = map.entry(index.to_string()).or_default();
     let id = entry.docs.len() + 1;
     let vector = extract_vector(&doc, "vector");
-    entry.docs.push(Document {
+    let document = Document {
         id,
         vector,
         data: doc,
-    });
+    };
+    entry.add_to_index(id, &document.data);
+    entry.docs.push(document);
     if persist {
         if let Err(e) = persist_index(index, entry).await {
             eprintln!("failed to save index {index}: {e}");
@@ -223,19 +225,31 @@ async fn search_documents(
         let fuzz = params.fuzz.unwrap_or(0);
         let include_scores = params.scores.unwrap_or(false);
         let query = params.q.to_lowercase();
-        let mut scored: Vec<(usize, f32)> = idx
-            .docs
-            .iter()
-            .filter_map(|d| {
-                if fuzz > 0 {
+        let mut scored: Vec<(usize, f32)> = if fuzz > 0 {
+            idx.docs
+                .iter()
+                .filter_map(|d| {
                     fuzzy_match(&d.data, &query, fuzz).map(|dist| (d.id, 1.0 / (dist as f32 + 1.0)))
-                } else if serialize_contains(&d.data, &query) {
-                    Some((d.id, 1.0))
-                } else {
-                    None
+                })
+                .collect()
+        } else {
+            use std::collections::HashSet;
+            let mut ids: HashSet<usize> = HashSet::new();
+            for token in query.split_whitespace() {
+                if let Some(list) = idx.inverted.get(token) {
+                    ids.extend(list.iter().copied());
                 }
-            })
-            .collect();
+            }
+            if ids.is_empty() {
+                ids.extend(
+                    idx.docs
+                        .iter()
+                        .filter(|d| serialize_contains(&d.data, &query))
+                        .map(|d| d.id),
+                );
+            }
+            ids.into_iter().map(|id| (id, 1.0)).collect()
+        };
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
         let results: Vec<_> = scored
             .into_iter()
